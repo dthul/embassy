@@ -6,7 +6,10 @@
 //!
 //! The available functionality depends on the timer type.
 
+use core::future::Future;
 use core::mem::ManuallyDrop;
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 use embassy_hal_internal::Peri;
 // Re-export useful enums
@@ -362,6 +365,21 @@ impl<'d, T: CoreInstance> Timer<'d, T> {
     /// Get the clock frequency of the timer (before prescaler is applied).
     pub fn get_clock_frequency(&self) -> Hertz {
         T::frequency()
+    }
+
+    fn new_future(&mut self) -> UpdateInterruptFuture<T> {
+        // Configuration steps from ST RM0390 (STM32F446) chapter 17.3.5
+        // or ST RM0008 (STM32F103) chapter 15.3.5 Input capture mode
+        self.enable_update_interrupt(true);
+
+        UpdateInterruptFuture { phantom: PhantomData }
+    }
+
+    /// Wait for the timer's global update interrupt.
+    /// An update interrupt handler for timer T needs to be bound and enabled
+    /// in the NVIC for this to work.
+    pub async fn wait_for_update(&mut self) {
+        self.new_future().await
     }
 }
 
@@ -764,5 +782,38 @@ impl<'d, T: AdvancedInstance4Channel> Timer<'d, T> {
     /// Setting this bit generates a break event. This bit is automatically cleared by the hardware.
     pub fn trigger_software_break(&self, n: usize) {
         self.regs_advanced().egr().write(|r| r.set_bg(n, true));
+    }
+}
+
+#[must_use = "futures do nothing unless you `.await` or poll them"]
+struct UpdateInterruptFuture<T: CoreInstance> {
+    phantom: PhantomData<T>,
+}
+
+impl<T: CoreInstance> Drop for UpdateInterruptFuture<T> {
+    fn drop(&mut self) {
+        critical_section::with(|_| {
+            let regs = unsafe { crate::pac::timer::TimGp16::from_ptr(T::regs()) };
+
+            // disable interrupt enable
+            regs.dier().modify(|w| w.set_uie(false));
+        });
+    }
+}
+
+impl<T: CoreInstance> Future for UpdateInterruptFuture<T> {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        T::state().up_waker.register(cx.waker());
+
+        let regs = unsafe { crate::pac::timer::TimGp16::from_ptr(T::regs()) };
+
+        let dier = regs.dier().read();
+        if !dier.uie() {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        }
     }
 }
