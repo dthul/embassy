@@ -406,16 +406,21 @@ impl<T: CoreInstance> interrupt::typelevel::Handler<T::UpdateInterrupt> for Upda
         // Read TIM interrupt flags.
         let sr = regs.sr().read();
 
-        // Mask relevant interrupts (UIE).
-        let bits = sr.0 & 0x00000001;
+        if !sr.uif() {
+            // This wasn't an update interrupt
+            return;
+        }
 
-        // Mask all the channels that fired.
-        regs.dier().modify(|w| w.0 &= !bits);
+        if !regs.dier().read().uie() {
+            // The interrupt was disabled in the meantime
+            return;
+        }
+
+        // Clear the update interrupt flag
+        regs.sr().modify(|r| r.set_uif(false));
 
         // Wake the tasks
-        if sr.uif() {
-            T::state().up_waker.wake();
-        }
+        T::state().up_waker.wake();
     }
 }
 
