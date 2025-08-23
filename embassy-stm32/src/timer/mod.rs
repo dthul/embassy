@@ -463,6 +463,9 @@ impl<T: GeneralInstance1Channel> interrupt::typelevel::Handler<T::CaptureCompare
         // Clear the corresponding capture/compare interrupt flags
         regs.sr().write(|r| r.0 = !ccif);
 
+        let sr_new = regs.sr().read();
+        let ccif_new = sr_new.0 & 0b11110;
+
         // Mask all the channels that fired.
         // This is how we signal the Future that it is ready
         regs.dier().modify(|w| w.0 &= !(ccif & ccie));
