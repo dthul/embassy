@@ -445,11 +445,27 @@ impl<T: GeneralInstance1Channel> interrupt::typelevel::Handler<T::CaptureCompare
         // Read TIM interrupt flags.
         let sr = regs.sr().read();
 
-        // Mask relevant interrupts (CCIE).
-        let bits = sr.0 & 0x0000001E;
+        // Extract the capture/compare interrupt flags from SR
+        let ccif = sr.0 & 0b11110;
+
+        if ccif == 0 {
+            // This wasn't a capture/compare interrupt
+            return;
+        }
+
+        let ccie = regs.dier().read().0 & 0b11110;
+
+        if (ccif & ccie) == 0 {
+            // All applicable capture/compare interrupts were disabled in the meantime
+            return;
+        }
+
+        // Clear the corresponding capture/compare interrupt flags
+        regs.sr().modify(|r| r.0 = !(ccif & ccie));
 
         // Mask all the channels that fired.
-        regs.dier().modify(|w| w.0 &= !bits);
+        // This is how we signal the Future that it is ready
+        regs.dier().modify(|w| w.0 &= !(ccif & ccie));
 
         // Wake the tasks
         for ch in 0..4 {

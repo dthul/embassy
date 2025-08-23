@@ -367,9 +367,7 @@ impl<'d, T: CoreInstance> Timer<'d, T> {
         T::frequency()
     }
 
-    fn new_future(&mut self) -> UpdateInterruptFuture<T> {
-        // Configuration steps from ST RM0390 (STM32F446) chapter 17.3.5
-        // or ST RM0008 (STM32F103) chapter 15.3.5 Input capture mode
+    fn new_update_interrupt_future(&self) -> UpdateInterruptFuture<T> {
         self.enable_update_interrupt(true);
 
         UpdateInterruptFuture { phantom: PhantomData }
@@ -378,8 +376,8 @@ impl<'d, T: CoreInstance> Timer<'d, T> {
     /// Wait for the timer's global update interrupt.
     /// An update interrupt handler for timer T needs to be bound and enabled
     /// in the NVIC for this to work.
-    pub async fn wait_for_update(&mut self) {
-        self.new_future().await
+    pub async fn wait_for_update(&self) {
+        self.new_update_interrupt_future().await
     }
 }
 
@@ -667,6 +665,22 @@ impl<'d, T: GeneralInstance4Channel> Timer<'d, T> {
     pub fn set_trigger_source(&self, ts: TriggerSource) {
         self.regs_gp16().smcr().modify(|r| r.set_ts(ts));
     }
+
+    fn new_capture_compare_future(&self, channel: Channel) -> CaptureCompareFuture<T> {
+        self.enable_input_interrupt(channel, true);
+
+        CaptureCompareFuture {
+            channel,
+            phantom: PhantomData,
+        }
+    }
+
+    /// Wait for the specified channel's capture/compare interrupt
+    /// A capture/compare interrupt handler for timer T needs to be bound and enabled
+    /// in the NVIC for this to work.
+    pub async fn wait_for_capture_compare(&self, channel: Channel) {
+        self.new_capture_compare_future(channel).await;
+    }
 }
 
 #[cfg(not(stm32l0))]
@@ -812,6 +826,41 @@ impl<T: CoreInstance> Future for UpdateInterruptFuture<T> {
         let dier = regs.dier().read();
         if !dier.uie() {
             Poll::Ready(())
+        } else {
+            Poll::Pending
+        }
+    }
+}
+
+#[must_use = "futures do nothing unless you `.await` or poll them"]
+struct CaptureCompareFuture<T: GeneralInstance1Channel> {
+    channel: Channel,
+    phantom: PhantomData<T>,
+}
+
+impl<T: GeneralInstance1Channel> Drop for CaptureCompareFuture<T> {
+    fn drop(&mut self) {
+        critical_section::with(|_| {
+            let regs = unsafe { crate::pac::timer::TimGp16::from_ptr(T::regs()) };
+
+            // disable interrupt enable
+            regs.dier().modify(|w| w.set_ccie(self.channel.index(), false));
+        });
+    }
+}
+
+impl<T: GeneralInstance1Channel> Future for CaptureCompareFuture<T> {
+    type Output = u32;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        T::state().cc_waker[self.channel.index()].register(cx.waker());
+
+        let regs = unsafe { crate::pac::timer::TimGp16::from_ptr(T::regs()) };
+
+        let dier = regs.dier().read();
+        if !dier.ccie(self.channel.index()) {
+            let val = regs.ccr(self.channel.index()).read().0;
+            Poll::Ready(val)
         } else {
             Poll::Pending
         }
