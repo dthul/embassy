@@ -807,13 +807,6 @@ impl<T: CoreInstance> Future for UpdateInterruptFuture<T> {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         T::state().up_waker.register(cx.waker());
 
-        let regs = unsafe { crate::pac::timer::TimGp16::from_ptr(T::regs()) };
-
-        let dier = regs.dier().read();
-        if !dier.uie() {
-            Poll::Ready(())
-        } else {
-            Poll::Pending
-        }
+        Poll::Ready(())
     }
 }
