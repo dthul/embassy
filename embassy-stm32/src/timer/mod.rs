@@ -419,6 +419,10 @@ impl<T: CoreInstance> interrupt::typelevel::Handler<T::UpdateInterrupt> for Upda
         // Clear the update interrupt flag
         regs.sr().modify(|r| r.set_uif(false));
 
+        // Disable the update interrupt
+        // This is how we signal the Future that it is ready
+        regs.dier().modify(|w| w.0 &= !0x1);
+
         // Wake the tasks
         T::state().up_waker.wake();
     }
