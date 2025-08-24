@@ -56,11 +56,6 @@ unsafe fn on_irq() {
     // Mask all the channels that fired.
     cpu_regs().imr(0).modify(|w| w.0 &= !bits);
 
-    // Wake the tasks
-    for pin in BitIter(bits) {
-        EXTI_WAKERS[pin as usize].wake();
-    }
-
     // Clear pending
     #[cfg(not(any(exti_c0, exti_g0, exti_u0, exti_l5, exti_u5, exti_h5, exti_h50)))]
     EXTI.pr(0).write_value(Lines(bits));
@@ -68,6 +63,11 @@ unsafe fn on_irq() {
     {
         EXTI.rpr(0).write_value(Lines(bits));
         EXTI.fpr(0).write_value(Lines(bits));
+    }
+
+    // Wake the tasks
+    for pin in BitIter(bits) {
+        EXTI_WAKERS[pin as usize].wake();
     }
 
     #[cfg(feature = "low-power")]
